@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+ENV/
+
+# Packaging
+*.egg-info/
+dist/
+build/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Node
+node_modules/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+
+# Data artifacts
+data/**/*.db*
+data/pfr_cache/
+exports/
+
+# Frontend build output (Vite)
+dist/
+
+# Logs
+*.log
+
+

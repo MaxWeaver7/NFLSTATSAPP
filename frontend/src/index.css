@@ -1,0 +1,202 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 4%;
+    --foreground: 0 0% 95%;
+
+    --card: 220 18% 8%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 220 18% 10%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 142 76% 50%;
+    --primary-foreground: 220 20% 4%;
+
+    --secondary: 220 14% 14%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 220 14% 12%;
+    --muted-foreground: 220 10% 65%;
+
+    --accent: 16 100% 65%;
+    --accent-foreground: 220 20% 4%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 95%;
+
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 142 76% 50%;
+
+    --radius: 0.75rem;
+
+    /* Custom tokens */
+    --stat-positive: 142 76% 50%;
+    --stat-negative: 0 72% 55%;
+    --stat-neutral: 220 10% 55%;
+    --surface-elevated: 220 18% 12%;
+  }
+
+  :root.light {
+    /* Light theme overrides (keeps the same token names so the app flips instantly) */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 142 76% 38%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 46%;
+
+    --accent: 16 100% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 142 76% 38%;
+
+    --stat-positive: 142 76% 38%;
+    --stat-negative: 0 72% 45%;
+    --stat-neutral: 215 16% 46%;
+    --surface-elevated: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+/* Override Tailwind's font-mono: use Inter with tabular-nums for clean open zeros */
+.font-mono {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+@layer utilities {
+  .stat-positive {
+    @apply text-primary;
+  }
+
+  .stat-negative {
+    color: hsl(var(--stat-negative));
+  }
+
+  .stat-neutral {
+    color: hsl(var(--stat-neutral));
+  }
+
+  .glass-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    box-shadow: 
+      0 0 0 1px hsl(var(--border) / 0.5),
+      0 8px 24px hsl(var(--foreground) / 0.06);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 30px hsl(var(--primary) / 0.3);
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 30px hsl(var(--accent) / 0.3);
+  }
+
+  .data-row {
+    @apply transition-all duration-200;
+  }
+
+  .data-row:hover {
+    background: hsl(var(--surface-elevated));
+    box-shadow: inset 3px 0 0 hsl(var(--primary));
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { 
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to { 
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.2s; }
+  .stagger-3 { animation-delay: 0.3s; }
+  .stagger-4 { animation-delay: 0.4s; }
+  .stagger-5 { animation-delay: 0.5s; }
+
+  /* Collapsible section (CSS-grid trick for smooth height animation) */
+  .collapsible-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.3s ease-out, opacity 0.2s ease-out;
+    opacity: 0;
+  }
+  .collapsible-content[data-open="true"] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  .collapsible-content > div {
+    overflow: hidden;
+  }
+
+  /* Glass card hover lift */
+  .glass-card-interactive {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .glass-card-interactive:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 1px hsl(var(--border) / 0.5), 0 12px 32px hsl(var(--foreground) / 0.1);
+  }
+
+  /* Slide down animation */
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-slide-down {
+    animation: slideDown 0.3s ease-out forwards;
+  }
+}
+
+
