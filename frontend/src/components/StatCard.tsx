@@ -44,7 +44,7 @@ export function StatCard({ label, value, subValue, trend = 'neutral', sparkline,
       )}
 
       <div className="flex items-center justify-between mb-1">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
           {label}
         </p>
         {rank && (
@@ -54,7 +54,7 @@ export function StatCard({ label, value, subValue, trend = 'neutral', sparkline,
         )}
       </div>
       <div className={cn(
-        "text-2xl font-bold font-mono",
+        "text-3xl font-bold font-mono leading-tight text-center",
         trend === 'positive' && "text-primary",
         trend === 'negative' && "text-destructive",
         trend === 'neutral' && "text-foreground"
@@ -62,7 +62,7 @@ export function StatCard({ label, value, subValue, trend = 'neutral', sparkline,
         {value}
       </div>
       {subValue && (
-        <p className="text-xs text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground mt-1 text-center">
           {subValue}
         </p>
       )}

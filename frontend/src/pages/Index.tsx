@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { PlayerCard } from "@/components/PlayerCard";
 import { SeasonSummary } from "@/components/SeasonSummary";
 import { ComparisonModal } from "@/components/comparison/ComparisonModal";
 import { PlayerDossierSkeleton } from "@/components/skeletons/PlayerDossierSkeleton";
-import { AdvancedStatsTable } from "@/components/AdvancedStatsTable";
-import { GoatAdvancedStats } from "@/components/GoatAdvancedStats";
+import { Last5GamesStrip } from "@/components/Last5GamesStrip";
 import { AnimatedSelect } from "@/components/common/AnimatedSelect";
-import { useFilterOptions, usePlayers, useInjuries } from "@/hooks/useApi";
-import { Player, PlayerGameLog } from "@/types/player";
+import { useFilterOptions, usePlayers, useInjuries, usePlayerDetail } from "@/hooks/useApi";
+import { Player } from "@/types/player";
 import { useSearchParams, useNavigate } from "react-router-dom";
+import { ensureReadableColor } from "@/lib/utils";
 
 const Index = () => {
   const navigate = useNavigate();
@@ -38,13 +37,16 @@ const Index = () => {
   const serverSearch = debouncedSearch.trim().length >= 2 ? debouncedSearch.trim() : "";
   const isServerSearchActive = serverSearch.length >= 2;
 
-  // Debounce search so we don't hammer /api/players while typing.
+  // Infinite scroll sentinel ref
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Debounce search
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(search), 250);
     return () => window.clearTimeout(t);
   }, [search]);
 
-  // Reset paging when filters/search change.
+  // Reset paging when filters/search change
   useEffect(() => {
     setOffset(0);
     setAllPlayers([]);
@@ -60,28 +62,13 @@ const Index = () => {
     PAGE_SIZE
   );
 
-
-  async function fetchJson<T>(url: string): Promise<T> {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
   // Allow deep-linking to a player even if they are not in the currently loaded list page.
   const activePlayerId = (selectedPlayer?.player_id || requestedPlayerId || "").trim();
 
-  const { data: playerDetail, isLoading: detailLoading } = useQuery({
-    queryKey: ["player", activePlayerId, selectedSeason, includePostseason],
-    queryFn: () => {
-      const pid = activePlayerId;
-      const qs = new URLSearchParams({ season: String(selectedSeason) });
-      if (includePostseason) qs.set("include_postseason", "1");
-      return fetchJson<{ player: Player; gameLogs: PlayerGameLog[]; goatAdvanced?: any }>(`/api/player/${pid}?${qs.toString()}`);
-    },
-    enabled: !!activePlayerId && !!selectedSeason,
-  });
+  // Use the full player detail hook — gives us rankings + seasonAdvanced for bubbles
+  const { data: playerDetail, isLoading: detailLoading } = usePlayerDetail(activePlayerId, selectedSeason);
 
-  // Merge pages (server returns stable objects; de-dupe by player_id just in case).
+  // Merge pages (server returns stable objects; de-dupe by player_id)
   useEffect(() => {
     const page = playersData?.players || [];
     if (offset === 0) {
@@ -108,22 +95,33 @@ const Index = () => {
     const team = selectedTeam.trim().toUpperCase();
     const pos = selectedPosition.trim().toUpperCase();
 
-    return base.filter((p) => {
+    const filtered = base.filter((p) => {
       if (team && String(p.team || "").toUpperCase() !== team) return false;
       if (pos && String(p.position || "").toUpperCase() !== pos) return false;
       if (q && !p.player_name.toLowerCase().includes(q)) return false;
       return true;
     });
+
+    // Sort by total yards descending
+    filtered.sort((a, b) => {
+      const sa = a.seasonTotals || a;
+      const sb = b.seasonTotals || b;
+      const totA = (sa.passingYards || 0) + (sa.rushingYards || 0) + (sa.receivingYards || 0);
+      const totB = (sb.passingYards || 0) + (sb.rushingYards || 0) + (sb.receivingYards || 0);
+      return totB - totA;
+    });
+
+    return filtered;
   }, [allPlayers, search, selectedTeam, selectedPosition]);
 
-  // If coming from Leaderboards, honor ?season= and ?player_id=.
+  // Honor ?season= query param
   useEffect(() => {
     if (!Number.isFinite(requestedSeason) || requestedSeason <= 0) return;
     if (requestedSeason !== selectedSeason) setSelectedSeason(requestedSeason);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedSeason]);
 
-  // When options load (async), prefer the latest season unless user already chose something valid.
+  // When options load, prefer the latest season
   useEffect(() => {
     const seasons = options?.seasons || [];
     if (seasons.length === 0) return;
@@ -132,7 +130,7 @@ const Index = () => {
     }
   }, [options?.seasons, selectedSeason]);
 
-  // When deep-linking, once the detail loads, sync selection state so the UI highlights the player.
+  // When deep-linking, sync selection state
   useEffect(() => {
     if (!requestedPlayerId) return;
     const p = playerDetail?.player;
@@ -141,25 +139,45 @@ const Index = () => {
     setSelectedPlayer(p);
   }, [requestedPlayerId, playerDetail?.player, selectedPlayer?.player_id]);
 
-  // Auto-select first player when list changes (but not if deep-linking to a specific player)
+  // Auto-select first player when list changes
   useEffect(() => {
-    if (requestedPlayerId) return; // Don't auto-select if URL has a specific player
+    if (requestedPlayerId) return;
     if (visiblePlayers.length > 0 && !selectedPlayer) {
       setSelectedPlayer(visiblePlayers[0]);
     }
   }, [visiblePlayers, selectedPlayer, requestedPlayerId]);
 
+  // Infinite scroll
+  const hasMore = !isServerSearchActive && (playersData?.hasMore ?? false);
+  const loadMore = useCallback(() => {
+    if (!hasMore || playersLoading || playersFetching) return;
+    setOffset(playersData?.nextOffset ?? offset + PAGE_SIZE);
+  }, [hasMore, playersLoading, playersFetching, playersData?.nextOffset, offset]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore]);
+
   const currentPlayer = playerDetail?.player || selectedPlayer;
   const gameLogs = playerDetail?.gameLogs || [];
-  const goatAdvanced = (playerDetail as any)?.goatAdvanced || null;
+  const rankings = playerDetail?.rankings || {};
+  const seasonAdvanced = playerDetail?.seasonAdvanced || {};
   const accent = (currentPlayer as any)?.teamColors?.primary || "";
+  const readableAccent = ensureReadableColor(accent);
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
 
       <main className="container mx-auto px-4 py-8">
-        {/* Filters — inline row */}
+        {/* Filters */}
         <div className="flex flex-wrap items-center gap-2 mb-5 opacity-0 animate-slide-up relative z-[100]">
           <AnimatedSelect
             label="Season"
@@ -181,100 +199,99 @@ const Index = () => {
           />
         </div>
 
-        <div className="grid lg:grid-cols-12 gap-8 relative z-0">
-          {/* Player List Sidebar */}
-          <div className="lg:col-span-4 space-y-3">
-            <div className="opacity-0 animate-fade-in">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search players…"
-                className="w-full h-[30px] px-2.5 rounded-lg border border-white/[0.06] bg-white/[0.03] text-xs text-foreground/80 placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-white/20"
-              />
-              {(playersLoading || playersFetching) && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  {playersLoading ? 'Loading...' : 'Updating…'}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-3 max-h-[calc(100vh-300px)] overflow-y-auto pr-2">
-              {visiblePlayers.map((player, idx) => (
-                <PlayerCard
-                  key={player.player_id}
-                  player={player}
-                  isSelected={false}
-                  onClick={() => setSelectedPlayer(player)}
-                  onCompare={(p) => {
-                    setCompareTarget(p);
-                    setCompareOpen(true);
-                  }}
-                  // Avoid huge perceived slowness from staggered animations on large lists.
-                  delay={idx < 16 ? 60 + idx * 20 : 0}
-                  injuryStatus={injuryMap?.[player.player_id]?.status}
+        <div className="grid lg:grid-cols-12 gap-6 relative z-0">
+          {/* Player List Sidebar — sticky */}
+          <div className="lg:col-span-4">
+            <div className="lg:sticky lg:top-4 space-y-1.5">
+              <div className="opacity-0 animate-fade-in">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search players..."
+                  className="w-full h-[30px] px-2.5 rounded-lg border border-white/[0.06] bg-white/[0.03] text-xs text-foreground/80 placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-white/20"
                 />
-              ))}
+                {(playersLoading || playersFetching) && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {playersLoading ? 'Loading...' : 'Updating...'}
+                  </p>
+                )}
+              </div>
 
-              {!playersLoading && visiblePlayers.length === 0 && (
-                <div className="glass-card rounded-xl p-8 text-center">
-                  <p className="text-muted-foreground">No players found for the selected filters.</p>
-                </div>
-              )}
+              <div className="space-y-1.5 max-h-[calc(100vh-160px)] overflow-y-auto pr-1 scrollbar-thin">
+                {visiblePlayers.map((player, idx) => (
+                  <PlayerCard
+                    key={player.player_id}
+                    player={player}
+                    isSelected={currentPlayer?.player_id === player.player_id}
+                    onClick={() => setSelectedPlayer(player)}
+                    onCompare={(p) => {
+                      setCompareTarget(p);
+                      setCompareOpen(true);
+                    }}
+                    delay={idx < 16 ? 60 + idx * 20 : 0}
+                    injuryStatus={injuryMap?.[player.player_id]?.status}
+                  />
+                ))}
+
+                {!playersLoading && visiblePlayers.length === 0 && (
+                  <div className="glass-card rounded-xl p-8 text-center">
+                    <p className="text-muted-foreground">No players found for the selected filters.</p>
+                  </div>
+                )}
+
+                {/* Infinite scroll sentinel */}
+                {hasMore && <div ref={sentinelRef} className="h-4" />}
+              </div>
             </div>
-
-            {/* Paging (only when not searching) */}
-            {!playersLoading && !isServerSearchActive && (playersData?.hasMore ?? false) ? (
-              <button
-                type="button"
-                className="w-full h-10 px-3 rounded-lg border border-border bg-transparent text-sm text-foreground hover:bg-secondary transition-colors"
-                onClick={() => setOffset(playersData?.nextOffset ?? offset + PAGE_SIZE)}
-              >
-                Load more
-              </button>
-            ) : null}
           </div>
 
-          {/* Main Content */}
-          <div className="lg:col-span-8 space-y-6">
+          {/* Main Content — Dossier */}
+          <div className="lg:col-span-8">
             {currentPlayer ? (
-              <>
-                <div
-                  id="player-dossier"
-                  className="glass-card rounded-xl p-5 opacity-0 animate-slide-up relative overflow-hidden"
+              <div
+                id="player-dossier"
+                className="glass-card rounded-xl p-5 opacity-0 animate-slide-up relative overflow-hidden"
+                style={{
+                  animationDelay: "150ms",
+                  borderLeftWidth: "3px",
+                  borderLeftStyle: "solid",
+                  borderLeftColor: accent || "transparent",
+                  background: accent
+                    ? `linear-gradient(135deg, ${accent}25, ${accent}10, transparent)`
+                    : undefined,
+                }}
+              >
+                {detailLoading ? (
+                  <PlayerDossierSkeleton position={currentPlayer.position || undefined} />
+                ) : (
+                  <>
+                    <SeasonSummary player={{ ...currentPlayer, gameLogs }} rankings={rankings} seasonAdvanced={seasonAdvanced} />
+
+                    {/* Last 5 Games */}
+                    {gameLogs.length > 0 && (
+                      <Last5GamesStrip
+                        gameLogs={gameLogs}
+                        position={currentPlayer.position || "RB"}
+                      />
+                    )}
+                  </>
+                )}
+
+                {/* View Full Profile */}
+                <button
+                  onClick={() => navigate(`/player/${currentPlayer.player_id}`)}
+                  className="w-full mt-5 py-3 rounded-lg text-sm font-semibold tracking-wide uppercase transition-all hover:brightness-125 hover:scale-[1.01]"
                   style={{
-                    animationDelay: "150ms",
-                    borderLeftWidth: "3px",
-                    borderLeftStyle: "solid",
-                    borderLeftColor: accent || "transparent",
                     background: accent
-                      ? `linear-gradient(135deg, ${accent}25, ${accent}10, transparent)`
-                      : undefined,
+                      ? `linear-gradient(90deg, ${accent}50, ${accent}30)`
+                      : "rgba(255,255,255,0.08)",
+                    color: readableAccent || "inherit",
+                    border: `1px solid ${accent ? accent + "60" : "rgba(255,255,255,0.12)"}`,
                   }}
                 >
-                  <div className="absolute top-5 right-5 z-10">
-                    <button
-                      onClick={() => navigate(`/player/${currentPlayer.player_id}`)}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-secondary hover:bg-secondary/80 transition-colors flex items-center gap-1"
-                    >
-                      View Full Page ↗
-                    </button>
-                  </div>
-                  {detailLoading ? (
-                    <PlayerDossierSkeleton position={currentPlayer.position || undefined} />
-                  ) : (
-                    <SeasonSummary player={{ ...currentPlayer, gameLogs }} />
-                  )}
-
-                  {/* Accordion Reveal */}
-                  <DossierReveal
-                    loading={detailLoading}
-                    gameLogs={gameLogs}
-                    position={currentPlayer.position || "RB"}
-                    goatAdvanced={goatAdvanced}
-                    accent={accent}
-                  />
-                </div>
-              </>
+                  View Full Profile
+                </button>
+              </div>
             ) : (
               <div className="glass-card rounded-xl p-12 text-center opacity-0 animate-fade-in">
                 <p className="text-muted-foreground">Select a player to view detailed metrics</p>
@@ -295,88 +312,8 @@ const Index = () => {
         season={selectedSeason}
         includePostseason={includePostseason}
       />
-
     </div>
   );
 };
 
 export default Index;
-
-function DossierReveal({
-  loading,
-  gameLogs,
-  position,
-  goatAdvanced,
-  accent,
-}: {
-  loading: boolean;
-  gameLogs: PlayerGameLog[];
-  position: string;
-  goatAdvanced: any;
-  accent: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"gamelog" | "advanced">("gamelog");
-
-  return (
-    <div className="mt-5">
-      <button
-        type="button"
-        className="w-full h-11 px-4 rounded-lg border border-border bg-transparent text-sm text-foreground hover:bg-secondary transition-colors flex items-center justify-between"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className="font-medium">View Analysis</span>
-        <span className="text-muted-foreground">{open ? "▴" : "▾"}</span>
-      </button>
-
-      <div
-        className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
-        style={{
-          maxHeight: open ? 2000 : 0,
-          opacity: open ? 1 : 0,
-        }}
-        aria-hidden={!open}
-      >
-        <div className="pt-5">
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setTab("gamelog")}
-              className="h-9 px-3 rounded-lg border border-border text-sm transition-colors"
-              style={{
-                borderColor: tab === "gamelog" && accent ? accent : undefined,
-              }}
-            >
-              Game Log
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("advanced")}
-              className="h-9 px-3 rounded-lg border border-border text-sm transition-colors"
-              style={{
-                borderColor: tab === "advanced" && accent ? accent : undefined,
-              }}
-            >
-              Advanced Stats
-            </button>
-          </div>          <div className="mt-4">
-            {tab === "gamelog" ? (
-              gameLogs.length > 0 ? (
-                <AdvancedStatsTable gameLogs={gameLogs} position={position} />
-              ) : (
-                <div className="rounded-xl border border-border p-6 text-center">
-                  <p className="text-muted-foreground">
-                    {loading ? "Loading game logs..." : "No game logs available for this player and season."}
-                  </p>
-                </div>
-              )
-            ) : (
-              <GoatAdvancedStats data={goatAdvanced} />
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
