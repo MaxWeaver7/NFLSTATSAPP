@@ -21,6 +21,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import html as ihtml
 import json
 import re
 import sys
@@ -67,9 +68,70 @@ def parse_json_feed(body: str, snap: Snapshot) -> list[dict[str, Any]]:
     return [{"source_url": snap.original, "captured": snap.timestamp, "payload": data}]
 
 
+# --- VegasInsider golf futures (confirmed archived back to 2006) -------------
+
+def _clean(s: str) -> str:
+    s = re.sub(r"<[^>]+>", " ", s)
+    return re.sub(r"\s+", " ", ihtml.unescape(s).replace("\xa0", " ")).strip()
+
+
+def _frac_to_decimal(tok: str) -> float | None:
+    m = re.fullmatch(r"(\d{1,4})\s*/\s*(\d{1,4})", (tok or "").strip())
+    if not m:
+        return None
+    num, den = int(m.group(1)), int(m.group(2))
+    return round(num / den + 1, 4) if den else None
+
+
+_VI_TITLE = re.compile(r"ODDS TO WIN[^<]*", re.I)
+_VI_ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.I | re.S)
+_VI_CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.I | re.S)
+
+
+def parse_vegasinsider_futures(body: str, snap: Snapshot) -> list[dict[str, Any]]:
+    """
+    Precise parser for VegasInsider golf futures pages.
+
+    Layout: an ``ODDS TO WIN THE <event>`` title cell delimits each tournament
+    block; inside, rows are ``Name | Open | Current`` with fractional prices.
+    Each capture's *Current* column is the price as of ``snap.timestamp`` -- so
+    replaying every snapshot of one event reconstructs the line's movement.
+    """
+    titles = [(m.start(), _clean(m.group(0))) for m in _VI_TITLE.finditer(body)]
+    if not titles:
+        return []
+    bounds = [t[0] for t in titles] + [len(body)]
+
+    rows: list[dict[str, Any]] = []
+    for i, (pos, event) in enumerate(titles):
+        block = body[pos:bounds[i + 1]]
+        for rm in _VI_ROW.finditer(block):
+            cells = [_clean(c) for c in _VI_CELL.findall(rm.group(1))]
+            if len(cells) < 3:
+                continue
+            name = cells[0]
+            if not name or name.lower() == "name" or "open" in name.lower():
+                continue
+            open_dec, cur_dec = _frac_to_decimal(cells[1]), _frac_to_decimal(cells[-1])
+            if open_dec is None and cur_dec is None:
+                continue
+            rows.append({
+                "source_url": snap.original,
+                "captured": snap.timestamp,
+                "event": event,
+                "player": name,
+                "open": cells[1] or None,
+                "open_decimal": open_dec,
+                "current": cells[-1] or None,
+                "current_decimal": cur_dec,
+            })
+    return rows
+
+
 PARSERS = {
     "generic": parse_generic_html,
     "json": parse_json_feed,
+    "vegasinsider": parse_vegasinsider_futures,
 }
 
 
