@@ -40,3 +40,6 @@ dist/
 *.log
 
 
+
+# Scraped odds output (regenerable)
+data/golf_odds/

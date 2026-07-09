@@ -29,6 +29,7 @@ from typing import Any
 
 sys.path.insert(0, __file__.rsplit("/scripts/", 1)[0])
 
+from src.ingestion.odds_sink import build_sink  # noqa: E402
 from src.ingestion.wayback_odds_client import Snapshot, WaybackClient  # noqa: E402
 
 
@@ -146,18 +147,28 @@ def cmd_index(client: WaybackClient, pattern: str, limit: int) -> None:
     print(f"\n[{n} distinct captures shown for {pattern!r}]", file=sys.stderr)
 
 
-def cmd_scrape(client: WaybackClient, source: str, pattern: str, limit: int) -> None:
+def cmd_scrape(client: WaybackClient, source: str, pattern: str, limit: int,
+               out: Optional[str]) -> None:
     parser = PARSERS[source]
+    sink = build_sink(out) if out else None
     total_rows = n_pages = 0
-    for result in client.scrape(pattern, parser, match_type="prefix"):
-        n_pages += 1
-        total_rows += len(result)
-        for row in result:
-            print(json.dumps(row))
-        if limit and n_pages >= limit:
-            break
+    try:
+        for result in client.scrape(pattern, parser, match_type="prefix"):
+            n_pages += 1
+            total_rows += len(result)
+            if sink:
+                sink.write(result)
+            else:
+                for row in result:
+                    print(json.dumps(row))
+            if limit and n_pages >= limit:
+                break
+    finally:
+        if sink:
+            sink.close()
+    dest = f" -> {out}" if out else ""
     print(
-        f"\n[{n_pages} captures replayed, {total_rows} odds rows extracted]",
+        f"\n[{n_pages} captures replayed, {total_rows} odds rows extracted{dest}]",
         file=sys.stderr,
     )
 
@@ -171,13 +182,17 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="max captures (0 = all)")
     ap.add_argument("--rate", type=float, default=1.0,
                     help="min seconds between requests to archive.org (default 1.0)")
+    ap.add_argument("--out", default=None,
+                    help="persist rows: a file path (writes .jsonl + .csv) or "
+                         "'supabase' (upserts into golf_odds_history). "
+                         "Omit to print JSON to stdout.")
     args = ap.parse_args()
 
     client = WaybackClient(min_interval_seconds=args.rate)
     if args.source == "index":
         cmd_index(client, args.url_pattern, args.limit)
     else:
-        cmd_scrape(client, args.source, args.url_pattern, args.limit)
+        cmd_scrape(client, args.source, args.url_pattern, args.limit, args.out)
 
 
 if __name__ == "__main__":
